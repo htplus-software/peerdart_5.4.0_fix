@@ -12,6 +12,8 @@ class MediaConnection extends BaseConnection {
     connectionId = options?.connectionId ?? _idPrefix + util.randomToken();
     _negotiator = Negotiator(this);
 
+    _remoteReady = _localStream != null;
+
     if (_localStream != null) {
       _negotiator?.startConnection(
           options!.copyWith(originator: true, stream: _localStream));
@@ -23,12 +25,13 @@ class MediaConnection extends BaseConnection {
   // ignore: unused_field
   late MediaStream? _remoteStream;
 
+  bool _remoteReady = false;
+  final List<ServerMessage> _pendingCandidates = [];
+
   void addStream(MediaStream remoteStream) {
     logger.log('Receiving stream $remoteStream');
 
     _remoteStream = remoteStream;
-    // provider?.emit('stream', null, remoteStream); // Should we call this `open`?
-    // emit('stream', null, remoteStream); // Should we call this `open`?
     super.emit<MediaStream>(
         'stream', remoteStream); // Should we call this `open`?
   }
@@ -42,6 +45,7 @@ class MediaConnection extends BaseConnection {
 
     _localStream = null;
     _remoteStream = null;
+    _pendingCandidates.clear();
 
     // TODO: set stream to null when done.
     // if (this.options && this.options._stream) {
@@ -75,6 +79,10 @@ class MediaConnection extends BaseConnection {
         open = true;
         break;
       case ServerMessageType.Candidate:
+        if (!_remoteReady) {
+          _pendingCandidates.add(message);
+          break;
+        }
         _negotiator?.handleCandidate(RTCIceCandidate(
             payload["candidate"]["candidate"],
             payload["candidate"]["sdpMid"],
@@ -108,17 +116,40 @@ class MediaConnection extends BaseConnection {
             sdp: options!.payload!.sdp,
             connectionId: options!.payload!.connectionId,
             metadata: options!.payload!.metadata));
+
     _negotiator?.startConnection(op.payload!);
+    _flushCandidatesWhenReady();
+  }
 
-    // Retrieve lost messages stored because PeerConnection not set up.
-    final messages = provider?.getMessages(connectionId);
-
-    if (messages != null) {
-      for (var message in messages) {
-        handleMessage(message);
+  Future<void> _flushCandidatesWhenReady() async {
+    const step = Duration(milliseconds: 50);
+    for (var i = 0; i < 200; i++) {
+      if (_negotiator == null) return; // đã dispose
+      final pc = peerConnection;
+      if (pc != null) {
+        try {
+          final remote = await pc.getRemoteDescription();
+          if (remote != null) break;
+        } catch (_) {}
       }
-
-      open = true;
+      await Future.delayed(step);
     }
+
+    if (_negotiator == null || peerConnection == null) {
+      logger.warn("PeerConnection not ready, drop pending candidates");
+      return;
+    }
+
+    _remoteReady = true;
+
+    final stored = provider?.getMessages(connectionId) ?? <ServerMessage>[];
+    final pending = List<ServerMessage>.from(_pendingCandidates);
+    _pendingCandidates.clear();
+
+    for (final message in [...stored, ...pending]) {
+      handleMessage(message);
+    }
+
+    open = true;
   }
 }
