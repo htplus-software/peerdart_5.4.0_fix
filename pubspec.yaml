@@ -11,7 +11,7 @@ dependencies:
   uuid: ^3.0.6
   flutter_webrtc:
     git:
-      url: https://github.com/flutter-webrtc/flutter-webrtc.git
+      url: https://github.com/htplus-software/flutter-webrtc
       ref: duan/downgrade-to-flutter-3.24.5
   web_socket_channel: ^2.4.0
   events_emitter: ^0.5.2
